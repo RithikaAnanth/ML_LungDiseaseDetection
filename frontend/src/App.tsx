@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts'
 
 type ModelKey = 'svm' | 'rf' | 'knn'
 type ModelSelect = 'all' | ModelKey
@@ -28,6 +29,11 @@ type PredictResponse = {
 
 const API_BASE = 'http://localhost:5000'
 const MODEL_KEYS: ModelKey[] = ['svm', 'rf', 'knn']
+const PIE_COLORS: Record<string, string> = {
+  Normal: '#22c55e',
+  Pneumonia: '#f59e0b',
+  COVID: '#ef4444',
+}
 
 function prettyModelName(k: string) {
   const key = k.toLowerCase()
@@ -68,6 +74,107 @@ function ConfidenceBars({ probabilities }: { probabilities?: Probabilities }) {
           <div className="barVal">{pct(v)}</div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function ConfidencePieChart({
+  probabilities,
+  title = 'Confidence (pie)',
+}: {
+  probabilities?: Probabilities
+  title?: string
+}) {
+  const data = useMemo(() => {
+    const p = probabilities || {}
+    const keys = ['Normal', 'Pneumonia', 'COVID']
+    const raw = keys.map((k) => ({
+      name: k,
+      value: clamp01(Number(p[k] ?? 0)),
+    }))
+    const sum = raw.reduce((acc, d) => acc + d.value, 0)
+    if (sum <= 0) return []
+    return raw.map((d) => ({ ...d, value: d.value / sum }))
+  }, [probabilities])
+
+  if (!data.length) return <div className="empty">No confidence scores to plot.</div>
+
+  const renderLabel = ({
+    cx,
+    cy,
+    midAngle,
+    outerRadius,
+    percent,
+    name,
+  }: {
+    cx: number
+    cy: number
+    midAngle: number
+    outerRadius: number
+    percent: number
+    name: string
+  }) => {
+    if (!percent || percent * 100 < 5) return null
+    const rad = (Math.PI / 180) * (midAngle * -1)
+    const radius = outerRadius + 16
+    const x = cx + radius * Math.cos(rad)
+    const y = cy + radius * Math.sin(rad)
+    return (
+      <text
+        x={x}
+        y={y}
+        fill={PIE_COLORS[name] || '#e5e7eb'}
+        textAnchor={x > cx ? 'start' : 'end'}
+        dominantBaseline="central"
+        style={{ fontSize: 12 }}
+      >
+        {`${name} ${(percent * 100).toFixed(0)}%`}
+      </text>
+    )
+  }
+
+  return (
+    <div className="chartWrap">
+      <div className="chartTitle">{title}</div>
+      <div className="chartBox">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Tooltip
+              formatter={(v: any, name: any) => [`${Math.round(Number(v) * 100)}%`, String(name)]}
+              contentStyle={{
+                background: 'rgba(10, 15, 32, 0.92)',
+                border: '1px solid rgba(255,255,255,0.14)',
+                borderRadius: 12,
+                color: 'rgba(255,255,255,0.92)',
+              }}
+              itemStyle={{ color: 'rgba(255,255,255,0.92)' }}
+            />
+            <Legend
+              verticalAlign="bottom"
+              height={26}
+              formatter={(value) => <span style={{ color: 'rgba(255,255,255,0.72)' }}>{String(value)}</span>}
+            />
+            <Pie
+              data={data}
+              dataKey="value"
+              nameKey="name"
+              cx="50%"
+              cy="46%"
+              outerRadius="78%"
+              innerRadius="42%"
+              paddingAngle={4}
+              isAnimationActive
+              animationDuration={550}
+              labelLine={false}
+              label={renderLabel}
+            >
+              {data.map((entry) => (
+                <Cell key={entry.name} fill={PIE_COLORS[entry.name] || '#7c5cff'} />
+              ))}
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   )
 }
@@ -196,6 +303,39 @@ export default function App() {
   const availableModels = payload?.available_models || []
   const results = payload?.results || {}
 
+  const pieSource = useMemo(() => {
+    if (!payload) return undefined
+
+    // If a single model is selected, prefer its own probabilities.
+    if (model !== 'all') {
+      const r = results[model]
+      if (r && !('error' in r) && r.probabilities) return r.probabilities
+    }
+
+    // For ALL (or as fallback), use average_probabilities from backend when available.
+    const avg = payload.feature_insights?.average_probabilities
+    if (avg) return avg
+
+    // Optional fallback: average over all available model probability dicts.
+    const probSources: Probabilities[] = []
+    for (const k of MODEL_KEYS) {
+      const r = results[k]
+      if (r && !('error' in r) && r.probabilities) probSources.push(r.probabilities)
+    }
+    if (probSources.length) {
+      const labels = ['Normal', 'Pneumonia', 'COVID']
+      const out: Probabilities = {}
+      for (const lbl of labels) {
+        let s = 0
+        for (const p of probSources) s += Number(p[lbl] ?? 0)
+        out[lbl] = s / probSources.length
+      }
+      return out
+    }
+
+    return undefined
+  }, [model, payload, results])
+
   const backendBadge = useMemo(() => {
     if (backendOk === null) return { text: 'checking…', cls: 'muted' }
     if (backendOk) return { text: 'connected', cls: 'good' }
@@ -302,6 +442,11 @@ export default function App() {
               <div className="empty">{loading ? 'Running prediction…' : 'No predictions yet.'}</div>
             )}
           </div>
+          {payload ? (
+            <div style={{ marginTop: 12 }}>
+              <ConfidencePieChart probabilities={pieSource} title="Confidence (overview)" />
+            </div>
+          ) : null}
         </section>
 
         <section className="card span2">
