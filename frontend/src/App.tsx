@@ -27,7 +27,7 @@ type PredictResponse = {
   details?: string
 }
 
-const API_BASE = 'http://localhost:5000'
+const API_BASE = 'https://ml-lungdiseasedetection.onrender.com'
 const MODEL_KEYS: ModelKey[] = ['svm', 'rf', 'knn']
 const PIE_COLORS: Record<string, string> = {
   Normal: '#22c55e',
